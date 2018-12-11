@@ -41,13 +41,13 @@ class Graph(object):
                                      scale=True,
                                      scope="enc_embed")
 
-                ## Positional Encoding
+                ## Positional Encoding, 将positional embedding和 word embedding直接相加
                 if hp.sinusoid:
-                    self.enc += positional_encoding(self.x,
+                    self.enc += tf.cast(positional_encoding(self.x,
                                                     num_units=hp.hidden_units,
                                                     zero_pad=False,
                                                     scale=False,
-                                                    scope="enc_pe")
+                                                    scope="enc_pe"), dtype=tf.float32)
                 else:
                     self.enc += embedding(
                         tf.tile(tf.expand_dims(tf.range(tf.shape(self.x)[1]), 0), [tf.shape(self.x)[0], 1]),
@@ -75,7 +75,7 @@ class Graph(object):
                                                        causality=False)
 
                         ### Feed Forward
-                        self.enc = feedforward(self.enc, num_units=[4 * hp.hidden_units, hp.hidden_units])
+                        self.enc = feedforward(self.enc, num_units=[4 * hp.hidden_units, hp.hidden_units])  # [batch, seq, hidden]
 
             # Decoder
             with tf.variable_scope("decoder"):
@@ -88,12 +88,11 @@ class Graph(object):
 
                 ## Positional Encoding
                 if hp.sinusoid:
-                    self.dec += positional_encoding(self.decoder_inputs,
-                                                    vocab_size=hp.maxlen,
+                    self.dec += tf.cast(positional_encoding(self.decoder_inputs,
                                                     num_units=hp.hidden_units,
                                                     zero_pad=False,
                                                     scale=False,
-                                                    scope="dec_pe")
+                                                    scope="dec_pe"), dtype=tf.float32)
                 else:
                     self.dec += embedding(tf.tile(tf.expand_dims(tf.range(tf.shape(self.decoder_inputs)[1]), 0),
                                                   [tf.shape(self.decoder_inputs)[0], 1]),
@@ -175,8 +174,8 @@ if __name__ == '__main__':
         for epoch in range(1, hp.num_epochs + 1):
             if sv.should_stop(): break
             for step in tqdm(range(g.num_batch), total=g.num_batch, ncols=70, leave=False, unit='b'):
-                _, oo = sess.run([g.train_op, g.enc])
-
+                _, loss = sess.run([g.train_op, g.mean_loss])
+                # print(loss)
 
             gs = sess.run(g.global_step)
             sv.saver.save(sess, hp.logdir + '/model_epoch_%02d_gs_%d' % (epoch, gs))

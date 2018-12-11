@@ -9,7 +9,9 @@ https://www.github.com/kyubyong/transformer
 from __future__ import print_function
 import tensorflow as tf
 import numpy as np
+import os
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
 def normalize(inputs,
               epsilon=1e-8,
@@ -143,6 +145,7 @@ def positional_encoding(inputs,
         A 'Tensor' with one more rank than inputs's, with the dimensionality should be 'num_units'
     '''
     N, T = inputs.get_shape().as_list()  # N=batch_size, T=sequence_length
+
     with tf.variable_scope(scope, reuse=reuse):
         position_ind = tf.tile(tf.expand_dims(tf.range(T), 0), [N, 1])
 
@@ -264,7 +267,7 @@ def feedforward(inputs,
                 num_units=[2048, 512],
                 scope="multihead_attention",
                 reuse=None):
-    '''Point-wise feed forward net.
+    '''Point-wise feed forward net. 使用两层一维卷积在保持维度不变的情况下进行重新映射
     
     Args:
       inputs: A 3d tensor with shape of [N, T, C].
@@ -293,7 +296,7 @@ def feedforward(inputs,
         # Normalize
         outputs = normalize(outputs)
 
-    return outputs
+    return outputs  # [N, T, C]
 
 
 def label_smoothing(inputs, epsilon=0.1):
