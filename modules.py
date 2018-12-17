@@ -13,6 +13,7 @@ import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
+
 def normalize(inputs,
               epsilon=1e-8,
               scope="ln",
@@ -123,6 +124,7 @@ def embedding(inputs,
 
 
 def positional_encoding(inputs,
+                        batch_size,
                         num_units,
                         zero_pad=True,
                         scale=True,
@@ -145,6 +147,8 @@ def positional_encoding(inputs,
         A 'Tensor' with one more rank than inputs's, with the dimensionality should be 'num_units'
     '''
     N, T = inputs.get_shape().as_list()  # N=batch_size, T=sequence_length
+    N = batch_size
+    print('N:', N, 'T:', T)
 
     with tf.variable_scope(scope, reuse=reuse):
         position_ind = tf.tile(tf.expand_dims(tf.range(T), 0), [N, 1])
@@ -203,12 +207,12 @@ def multihead_attention(queries,
         if num_units is None:
             num_units = queries.get_shape().as_list[-1]
 
-        # Linear projections
+        # Linear projections, 统一维度
         Q = tf.layers.dense(queries, num_units, activation=tf.nn.relu)  # (N, T_q, C)
         K = tf.layers.dense(keys, num_units, activation=tf.nn.relu)  # (N, T_k, C)
         V = tf.layers.dense(keys, num_units, activation=tf.nn.relu)  # (N, T_k, C)
 
-        # Split and concat
+        # Split and concat， 分隔成多head
         Q_ = tf.concat(tf.split(Q, num_heads, axis=2), axis=0)  # (h*N, T_q, C/h) 
         K_ = tf.concat(tf.split(K, num_heads, axis=2), axis=0)  # (h*N, T_k, C/h) 
         V_ = tf.concat(tf.split(V, num_heads, axis=2), axis=0)  # (h*N, T_k, C/h) 
@@ -224,13 +228,13 @@ def multihead_attention(queries,
         key_masks = tf.tile(key_masks, [num_heads, 1])  # (h*N, T_k)
         key_masks = tf.tile(tf.expand_dims(key_masks, 1), [1, tf.shape(queries)[1], 1])  # (h*N, T_q, T_k)
 
-        paddings = tf.ones_like(outputs) * (-2 ** 32 + 1)
-        outputs = tf.where(tf.equal(key_masks, 0), paddings, outputs)  # (h*N, T_q, T_k)
+        paddings = tf.ones_like(outputs) * (-2 ** 32 + 1)  # 使用较小的数字让该位置在softmax的时候会为0
+        outputs = tf.where(tf.equal(key_masks, 0), paddings, outputs)  # (h*N, T_q, T_k)， 将outputs padding部分用很小的数字代替
 
         # Causality = Future blinding, 在decoder中使用
         if causality:
             diag_vals = tf.ones_like(outputs[0, :, :])  # (T_q, T_k)
-            tril = tf.linalg.LinearOperatorLowerTriangular(diag_vals).to_dense() # (T_q, T_k)
+            tril = tf.linalg.LinearOperatorLowerTriangular(diag_vals).to_dense()  # (T_q, T_k)
             masks = tf.tile(tf.expand_dims(tril, 0), [tf.shape(outputs)[0], 1, 1])  # (h*N, T_q, T_k)
 
             paddings = tf.ones_like(masks) * (-2 ** 32 + 1)
@@ -243,13 +247,14 @@ def multihead_attention(queries,
         query_masks = tf.sign(tf.abs(tf.reduce_sum(queries, axis=-1)))  # (N, T_q)
         query_masks = tf.tile(query_masks, [num_heads, 1])  # (h*N, T_q)
         query_masks = tf.tile(tf.expand_dims(query_masks, -1), [1, 1, tf.shape(keys)[1]])  # (h*N, T_q, T_k)
-        outputs *= query_masks  # broadcasting. (N, T_q, C)
+        outputs *= query_masks  # broadcasting. (h*N, T_q, T_k)
+        print('shape-->{}: {}'.format('modules.outputs', np.shape(outputs)))
 
         # Dropouts
         outputs = tf.layers.dropout(outputs, rate=dropout_rate, training=tf.convert_to_tensor(is_training))
 
         # Weighted sum
-        outputs = tf.matmul(outputs, V_)  # ( h*N, T_q, C/h)
+        outputs = tf.matmul(outputs, V_)  # ( h*N, T_q, C/h)  ; V_: (h*N, T_k, C/h)
 
         # Restore shape
         outputs = tf.concat(tf.split(outputs, num_heads, axis=0), axis=2)  # (N, T_q, C)
@@ -264,7 +269,7 @@ def multihead_attention(queries,
 
 
 def feedforward(inputs,
-                num_units=[2048, 512],
+                num_units,
                 scope="multihead_attention",
                 reuse=None):
     '''Point-wise feed forward net. 使用两层一维卷积在保持维度不变的情况下进行重新映射
