@@ -29,10 +29,9 @@ def decode(integers):
         integers = integers[:integers.index(1)]  # 1 is EOS id
     return encoders["inputs"].decode(np.squeeze(integers))
 
-
-prefix = 'F:\sunmingsheng\Datasets\\tensor2tensnor\cnn_daily/'
-data_dir = prefix + 'data'
-tmp_dir = prefix + 'tmp'
+data_dir = '/media/satan/3e75fcb2-d0e7-4b40-9145-34692ff66ff1/sunmingsheng/DataSet/t2t/data'
+tmp_dir = '/media/satan/3e75fcb2-d0e7-4b40-9145-34692ff66ff1/sunmingsheng/DataSet/t2t/tmp'
+# train_dir = '/media/satan/3e75fcb2-d0e7-4b40-9145-34692ff66ff1/sunmingsheng/DataSet/t2t/google'
 
 dataLen = {'train': 287113, 'test': 11490, 'dev': 13368}
 cnn_dailymail = problems.problem('summarize_cnn_dailymail32k')
@@ -84,6 +83,6 @@ for k in kind:
                 'target_mask': tf.train.Feature(int64_list=tf.train.Int64List(value=t_mask)),
             }))
             tf_example = example.SerializeToString()
-            # writer.write(tf_example)
+            writer.write(tf_example)
         writer.close()
         tqbar.close()
