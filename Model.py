@@ -1,14 +1,7 @@
-from __future__ import print_function
-
 from collections import namedtuple
-
 import shutil
-
-from hyperparams import Hyperparams as hp
 from modules import *
-import os, codecs
-import tensorflow
-from tqdm import tqdm
+import os
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -80,7 +73,7 @@ class Model(object):
 
         # Placeholders for input, output and dropout
         self.input_x = tf.placeholder(tf.int32, [None, self.hps.input_max_len], name="input_x")
-        self.input_y = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name='x_mask')
+        self.input_y = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name='input_y')
         self.label_y = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name="label_y")
         self.y_mask = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name='y_mask')
 
@@ -98,24 +91,15 @@ class Model(object):
             print('shape-->{}: {}'.format('self.enc', np.shape(self.enc)))  # [batch_size, enc_max_len, embedding_size]
 
             # Positional Encoding, 将positional embedding和 word embedding直接相加
-            if self.hps.sinusoid:
-                self.enc += tf.cast(positional_encoding(self.input_x,
+            self.enc_pos = self.enc + tf.cast(positional_encoding(self.input_x,
                                                         self.batch_size,
                                                         num_units=self.hps.embedding_size,
                                                         zero_pad=False,
                                                         scale=False,
                                                         scope="enc_pe"), dtype=tf.float32)
-            else:
-                self.enc += embedding(
-                    tf.tile(tf.expand_dims(tf.range(tf.shape(self.input_x)[1]), 0), [tf.shape(self.input_x)[0], 1]),
-                    vocab_size=self.hps.input_max_len,
-                    num_units=self.hps.embedding_size,
-                    zero_pad=False,
-                    scale=False,
-                    scope="enc_pe")
 
             # Dropout
-            self.enc = tf.layers.dropout(self.enc,
+            self.enc_pos = tf.layers.dropout(self.enc_pos,
                                          rate=self.dropout_keep_prob,
                                          training=tf.convert_to_tensor(is_training))
 
@@ -123,15 +107,17 @@ class Model(object):
             for i in range(self.hps.num_blocks):
                 with tf.variable_scope("num_blocks_{}".format(i)):
                     # Multihead Attention
-                    self.enc = multihead_attention(queries=self.enc,
-                                                   keys=self.enc,
+                    self.enc = multihead_attention(queries=self.enc_pos,
+                                                   keys=self.enc_pos,
+                                                   unpos_key=self.enc,
+                                                   unpos_query=self.enc,
                                                    num_units=self.hps.embedding_size,
                                                    num_heads=self.hps.head_num,
                                                    dropout_rate=self.dropout_keep_prob,
                                                    is_training=is_training,
                                                    causality=False)
                     # Feed Forward
-                    self.enc = feedforward(self.enc,
+                    self.enc_pos = feedforward(self.enc_pos,
                                            num_units=[4 * self.hps.embedding_size, self.hps.embedding_size])  # [batch, seq, hidden]
             print('shape-->{}: {}'.format('multi_self.enc', np.shape(self.enc)))
         # Decoder
@@ -144,24 +130,16 @@ class Model(object):
                                  scope="dec_embed")
 
             ## Positional Encoding
-            if self.hps.sinusoid:
-                self.dec += tf.cast(positional_encoding(self.input_y,
-                                                        self.batch_size,
-                                                        num_units=self.hps.embedding_size,
-                                                        zero_pad=False,
-                                                        scale=False,
-                                                        scope="dec_pe"), dtype=tf.float32)
-            else:
-                self.dec += embedding(tf.tile(tf.expand_dims(tf.range(tf.shape(self.input_y)[1]), 0),
-                                              [tf.shape(self.input_y)[0], 1]),
-                                      vocab_size=self.hps.vocab_size,
-                                      num_units=self.hps.embedding_size,
-                                      zero_pad=False,
-                                      scale=False,
-                                      scope="dec_pe")
+            self.dec_pos = self.dec + tf.cast(positional_encoding(self.input_y,
+                                                                  self.batch_size,
+                                                                  num_units=self.hps.embedding_size,
+                                                                  zero_pad=False,
+                                                                  scale=False,
+                                                                  scope="dec_pe"), dtype=tf.float32)
+
 
             # Dropout
-            self.dec = tf.layers.dropout(self.dec,
+            self.dec_pos = tf.layers.dropout(self.dec_pos,
                                          rate=self.dropout_keep_prob,
                                          training=tf.convert_to_tensor(is_training))
 
@@ -169,8 +147,10 @@ class Model(object):
             for i in range(self.hps.num_blocks):
                 with tf.variable_scope("num_blocks_{}".format(i)):
                     ## Multihead Attention ( self-attention)
-                    self.dec = multihead_attention(queries=self.dec,
-                                                   keys=self.dec,
+                    self.dec_pos = multihead_attention(queries=self.dec_pos,
+                                                   keys=self.dec_pos,
+                                                   unpos_key=self.dec,
+                                                   unpos_query=self.dec,
                                                    num_units=self.hps.embedding_size,
                                                    num_heads=self.hps.head_num,
                                                    dropout_rate=self.dropout_keep_prob,
@@ -179,8 +159,10 @@ class Model(object):
                                                    scope="self_attention")  # [batch_size, target_len, embedding]
 
                     ## Multihead Attention ( vanilla attention)
-                    self.dec = multihead_attention(queries=self.dec,
-                                                   keys=self.enc,
+                    self.dec_pos = multihead_attention(queries=self.dec_pos,
+                                                   keys=self.enc_pos,
+                                                   unpos_key=self.enc,
+                                                   unpos_query=self.dec,
                                                    num_units=self.hps.embedding_size,
                                                    num_heads=self.hps.head_num,
                                                    dropout_rate=self.dropout_keep_prob,
@@ -189,27 +171,26 @@ class Model(object):
                                                    scope="vanilla_attention")  # [batch_size, target_len, embedding]
 
                     # Feed Forward, [batch_size, target_len, embedding]
-                    self.dec = feedforward(self.dec, num_units=[4 * self.hps.embedding_size, self.hps.embedding_size])
+                    self.dec_pos = feedforward(self.dec_pos, num_units=[4 * self.hps.embedding_size, self.hps.embedding_size])
 
         # Final linear projection
-        self.logits = tf.layers.dense(self.dec, self.hps.vocab_size)  # [batch_size, target_len, vocab_size]
+        self.logits = tf.layers.dense(self.dec_pos, self.hps.vocab_size)  # [batch_size, target_len, vocab_size]
         self.preds = tf.to_int32(tf.arg_max(self.logits, dimension=-1))
 
         if is_training:
             # Loss
-            self.y_smoothed = tf.one_hot(self.label_y, depth=self.hps.vocab_size)
-            self.loss = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.y_smoothed)
-            print('shape-->self.loss:', np.shape(self.loss))
-            # self.loss = tf.contrib.seq2seq.sequence_loss(
-            #         self.logits,
-            #         self.label_y,
-            #         self.y_mask
-            #     )
-            # self.mean_loss = tf.reduce_sum(self.loss * self.istarget) / (tf.reduce_sum(self.istarget))
-            self.mean_loss = tf.reduce_sum(self.loss * tf.cast(self.y_mask, dtype=tf.float32))
-
+            # self.y_smoothed = tf.one_hot(self.label_y, depth=self.hps.vocab_size)
+            # self.loss = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.y_smoothed)
+            # print('shape-->self.loss:', np.shape(self.loss))
+            self.loss = tf.contrib.seq2seq.sequence_loss(
+                    self.logits,
+                    self.label_y,
+                    tf.cast(self.y_mask, tf.float32)
+                )
+            # self.mean_loss = tf.reduce_sum(self.loss * tf.cast(self.y_mask, dtype=tf.float32))
+            self.mean_loss = self.loss
             # Training Scheme
-            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.hps.lr, beta1=0.9, beta2=0.98, epsilon=1e-8)
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.hps.lr)
             self.train_op = self.optimizer.minimize(self.mean_loss, global_step=self.global_step)
 
             # Summary
