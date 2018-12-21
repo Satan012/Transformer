@@ -155,7 +155,7 @@ def positional_encoding(inputs,
 
         # First part of the PE function: sin and cos argument
         position_enc = np.array([
-            [pos / np.power(10000, 2. * i / num_units) for i in range(num_units)]
+            [pos / np.power(10000, (i - i % 2) / num_units) for i in range(num_units)]
             for pos in range(T)])  # [N, T]([batch_size, seq_length])
 
         # Second part, apply the cosine to even columns and sin to odds.
@@ -178,6 +178,8 @@ def positional_encoding(inputs,
 
 def multihead_attention(queries,
                         keys,
+                        unpos_key,
+                        unpos_query,
                         num_units=None,
                         num_heads=8,
                         dropout_rate=0,
@@ -190,6 +192,8 @@ def multihead_attention(queries,
     Args:
       queries: A 3d tensor with shape of [N, T_q, C_q].
       keys: A 3d tensor with shape of [N, T_k, C_k].
+      unpos_key: use to calculate key_mask.
+      unpos_query: have same function like unpos_key.
       num_units: A scalar. Attention size.
       dropout_rate: A floating point number.
       is_training: Boolean. Controller of mechanism for dropout.
@@ -209,9 +213,9 @@ def multihead_attention(queries,
         # print(tf.shape(queries), tf.shape(keys))
 
         # Linear projections, 统一维度
-        Q = tf.layers.dense(queries, num_units, activation=tf.nn.relu)  # (N, T_q, C)
-        K = tf.layers.dense(keys, num_units, activation=tf.nn.relu)  # (N, T_k, C)
-        V = tf.layers.dense(keys, num_units, activation=tf.nn.relu)  # (N, T_k, C)
+        Q = tf.layers.dense(queries, num_units, activation=tf.nn.relu, use_bias=False)  # (N, T_q, C)
+        K = tf.layers.dense(keys, num_units, activation=tf.nn.relu, use_bias=False)  # (N, T_k, C)
+        V = tf.layers.dense(keys, num_units, activation=tf.nn.relu, use_bias=False)  # (N, T_k, C)
 
         # Split and concat， 分隔成多head
         Q_ = tf.concat(tf.split(Q, num_heads, axis=2), axis=0)  # (h*N, T_q, C/h) 
@@ -225,7 +229,7 @@ def multihead_attention(queries,
         outputs = outputs / (K_.get_shape().as_list()[-1] ** 0.5)
 
         # Key Masking
-        key_masks = tf.sign(tf.abs(tf.reduce_sum(keys, axis=-1)))  # (N, T_k), keys = [N, T_k, C_k]
+        key_masks = tf.sign(tf.abs(tf.reduce_sum(unpos_key, axis=-1)))  # (N, T_k), keys = [N, T_k, C_k]
         key_masks = tf.tile(key_masks, [num_heads, 1])  # (h*N, T_k)
         key_masks = tf.tile(tf.expand_dims(key_masks, 1), [1, tf.shape(queries)[1], 1])  # (h*N, T_q, T_k)
 
@@ -245,7 +249,7 @@ def multihead_attention(queries,
         outputs = tf.nn.softmax(outputs)  # (h*N, T_q, T_k)
 
         # Query Masking
-        query_masks = tf.sign(tf.abs(tf.reduce_sum(queries, axis=-1)))  # (N, T_q)
+        query_masks = tf.sign(tf.abs(tf.reduce_sum(unpos_query, axis=-1)))  # (N, T_q)
         query_masks = tf.tile(query_masks, [num_heads, 1])  # (h*N, T_q)
         query_masks = tf.tile(tf.expand_dims(query_masks, -1), [1, 1, tf.shape(keys)[1]])  # (h*N, T_q, T_k)
         outputs *= query_masks  # broadcasting. (h*N, T_q, T_k)
