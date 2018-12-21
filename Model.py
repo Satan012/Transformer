@@ -5,7 +5,6 @@ from collections import namedtuple
 import shutil
 
 from hyperparams import Hyperparams as hp
-from data_load import get_batch_data, load_de_vocab, load_en_vocab
 from modules import *
 import os, codecs
 import tensorflow
@@ -16,18 +15,18 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('train_set_path', 'cnn_tfrecord/google/train.tfrecord', 'the path of train set')
 tf.app.flags.DEFINE_string('valid_set_path', 'cnn_tfrecord/google/valid.tfrecord', 'the path of validation set')
 tf.app.flags.DEFINE_string('test_set_path', 'cnn_tfrecord/google/test.tfrecord', 'the path of test set')
-tf.app.flags.DEFINE_integer('epoch', 30, 'epoch of training step')
-tf.app.flags.DEFINE_integer('batch_size', 64, 'mini_batch size')
+tf.app.flags.DEFINE_integer('epoch', 100, 'epoch of training step')
+tf.app.flags.DEFINE_integer('batch_size', 16, 'mini_batch size')
 tf.app.flags.DEFINE_integer('input_max_len', 1000, 'max text length of input')
 tf.app.flags.DEFINE_integer('target_max_len', 100, 'max text length of target')
 tf.app.flags.DEFINE_integer('vocab_size', 32782, 'size of vocab')
-tf.app.flags.DEFINE_integer('embedding_size', 512, 'embedding size of word')
-tf.app.flags.DEFINE_integer('num_filter', 256, 'number of filter')
+tf.app.flags.DEFINE_integer('embedding_size', 256, 'embedding size of word')
 tf.app.flags.DEFINE_string('model_state', 'train', 'model state')
-tf.app.flags.DEFINE_boolean('debugging', True, 'delete log or not')
-tf.app.flags.DEFINE_integer('class_num', 19, 'number of classes')
-tf.app.flags.DEFINE_float('lr', 0.001, 'learning rate')
-# tf.app.flags.DEFINE_integer('hidden_num', 512, 'hidden num of transformer')
+tf.app.flags.DEFINE_boolean('debugging', True, 'debugging or not')
+tf.app.flags.DEFINE_integer('head_num', 4, 'number of head')
+tf.app.flags.DEFINE_float('lr', 0.1, 'learning rate')
+tf.app.flags.DEFINE_integer('num_blocks', 6, 'number of block')
+tf.app.flags.DEFINE_boolean('sinusoid', True, 'whether use to positional embedding')
 
 
 class Model(object):
@@ -41,17 +40,17 @@ class Model(object):
         parsed_example = tf.parse_single_example(
             example_proto,
             features={
-                'encoder_input': tf.VarLenFeature(dtype=tf.int64),
+                'enc_input': tf.VarLenFeature(dtype=tf.int64),
                 'dec_input': tf.VarLenFeature(dtype=tf.int64),
                 'target': tf.VarLenFeature(dtype=tf.int64),
                 'target_mask': tf.VarLenFeature(dtype=tf.int64)
             }
         )
         result = {
-            'enc_input': tf.sparse.to_dense(tf.cast(parsed_example['encoder_input'], tf.int32)),
-            'dec_input': tf.sparse.to_dense(tf.cast(parsed_example['dec_input'], tf.int32)),
-            'target': tf.sparse.to_dense(tf.cast(parsed_example['target'], tf.int32)),  # 标签
-            'target_mask': tf.sparse.to_dense(tf.cast(parsed_example['target_mask'], tf.int32))
+            'enc_input': tf.sparse_tensor_to_dense(tf.cast(parsed_example['enc_input'], tf.int32)),
+            'dec_input': tf.sparse_tensor_to_dense(tf.cast(parsed_example['dec_input'], tf.int32)),
+            'target': tf.sparse_tensor_to_dense(tf.cast(parsed_example['target'], tf.int32)),  # 标签
+            'target_mask': tf.sparse_tensor_to_dense(tf.cast(parsed_example['target_mask'], tf.int32))
         }
         return result
 
@@ -81,7 +80,6 @@ class Model(object):
 
         # Placeholders for input, output and dropout
         self.input_x = tf.placeholder(tf.int32, [None, self.hps.input_max_len], name="input_x")
-
         self.input_y = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name='x_mask')
         self.label_y = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name="label_y")
         self.y_mask = tf.placeholder(tf.int32, [None, self.hps.target_max_len], name='y_mask')
@@ -100,7 +98,7 @@ class Model(object):
             print('shape-->{}: {}'.format('self.enc', np.shape(self.enc)))  # [batch_size, enc_max_len, embedding_size]
 
             # Positional Encoding, 将positional embedding和 word embedding直接相加
-            if hp.sinusoid:
+            if self.hps.sinusoid:
                 self.enc += tf.cast(positional_encoding(self.input_x,
                                                         self.batch_size,
                                                         num_units=self.hps.embedding_size,
@@ -110,8 +108,8 @@ class Model(object):
             else:
                 self.enc += embedding(
                     tf.tile(tf.expand_dims(tf.range(tf.shape(self.input_x)[1]), 0), [tf.shape(self.input_x)[0], 1]),
-                    vocab_size=hp.maxlen,
-                    num_units=hp.hidden_units,
+                    vocab_size=self.hps.input_max_len,
+                    num_units=self.hps.embedding_size,
                     zero_pad=False,
                     scale=False,
                     scope="enc_pe")
@@ -122,14 +120,14 @@ class Model(object):
                                          training=tf.convert_to_tensor(is_training))
 
             # Blocks
-            for i in range(hp.num_blocks):
+            for i in range(self.hps.num_blocks):
                 with tf.variable_scope("num_blocks_{}".format(i)):
                     # Multihead Attention
                     self.enc = multihead_attention(queries=self.enc,
                                                    keys=self.enc,
                                                    num_units=self.hps.embedding_size,
-                                                   num_heads=hp.num_heads,
-                                                   dropout_rate=hp.dropout_rate,
+                                                   num_heads=self.hps.head_num,
+                                                   dropout_rate=self.dropout_keep_prob,
                                                    is_training=is_training,
                                                    causality=False)
                     # Feed Forward
@@ -146,18 +144,18 @@ class Model(object):
                                  scope="dec_embed")
 
             ## Positional Encoding
-            if hp.sinusoid:
+            if self.hps.sinusoid:
                 self.dec += tf.cast(positional_encoding(self.input_y,
                                                         self.batch_size,
-                                                        num_units=hp.hidden_units,
+                                                        num_units=self.hps.embedding_size,
                                                         zero_pad=False,
                                                         scale=False,
                                                         scope="dec_pe"), dtype=tf.float32)
             else:
                 self.dec += embedding(tf.tile(tf.expand_dims(tf.range(tf.shape(self.input_y)[1]), 0),
                                               [tf.shape(self.input_y)[0], 1]),
-                                      vocab_size=hp.maxlen,
-                                      num_units=hp.hidden_units,
+                                      vocab_size=self.hps.vocab_size,
+                                      num_units=self.hps.embedding_size,
                                       zero_pad=False,
                                       scale=False,
                                       scope="dec_pe")
@@ -168,14 +166,14 @@ class Model(object):
                                          training=tf.convert_to_tensor(is_training))
 
             # Blocks
-            for i in range(hp.num_blocks):
+            for i in range(self.hps.num_blocks):
                 with tf.variable_scope("num_blocks_{}".format(i)):
                     ## Multihead Attention ( self-attention)
                     self.dec = multihead_attention(queries=self.dec,
                                                    keys=self.dec,
-                                                   num_units=hp.hidden_units,
-                                                   num_heads=hp.num_heads,
-                                                   dropout_rate=hp.dropout_rate,
+                                                   num_units=self.hps.embedding_size,
+                                                   num_heads=self.hps.head_num,
+                                                   dropout_rate=self.dropout_keep_prob,
                                                    is_training=is_training,
                                                    causality=True,
                                                    scope="self_attention")  # [batch_size, target_len, embedding]
@@ -183,9 +181,9 @@ class Model(object):
                     ## Multihead Attention ( vanilla attention)
                     self.dec = multihead_attention(queries=self.dec,
                                                    keys=self.enc,
-                                                   num_units=hp.hidden_units,
-                                                   num_heads=hp.num_heads,
-                                                   dropout_rate=hp.dropout_rate,
+                                                   num_units=self.hps.embedding_size,
+                                                   num_heads=self.hps.head_num,
+                                                   dropout_rate=self.dropout_keep_prob,
                                                    is_training=is_training,
                                                    causality=False,
                                                    scope="vanilla_attention")  # [batch_size, target_len, embedding]
@@ -199,7 +197,7 @@ class Model(object):
 
         if is_training:
             # Loss
-            self.y_smoothed = label_smoothing(tf.one_hot(self.label_y, depth=self.hps.vocab_size))
+            self.y_smoothed = tf.one_hot(self.label_y, depth=self.hps.vocab_size)
             self.loss = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.y_smoothed)
             print('shape-->self.loss:', np.shape(self.loss))
             # self.loss = tf.contrib.seq2seq.sequence_loss(
@@ -208,11 +206,10 @@ class Model(object):
             #         self.y_mask
             #     )
             # self.mean_loss = tf.reduce_sum(self.loss * self.istarget) / (tf.reduce_sum(self.istarget))
-            self.mean_loss = tf.reduce_sum(self.loss * tf.cast(self.label_y, dtype=tf.float32))
+            self.mean_loss = tf.reduce_sum(self.loss * tf.cast(self.y_mask, dtype=tf.float32))
 
             # Training Scheme
-            self.global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.optimizer = tf.train.AdamOptimizer(learning_rate=hp.lr, beta1=0.9, beta2=0.98, epsilon=1e-8)
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.hps.lr, beta1=0.9, beta2=0.98, epsilon=1e-8)
             self.train_op = self.optimizer.minimize(self.mean_loss, global_step=self.global_step)
 
             # Summary
