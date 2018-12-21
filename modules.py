@@ -11,7 +11,7 @@ import tensorflow as tf
 import numpy as np
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
 
 def normalize(inputs,
@@ -206,6 +206,7 @@ def multihead_attention(queries,
         # Set the fall back option for num_units
         if num_units is None:
             num_units = queries.get_shape().as_list[-1]
+        # print(tf.shape(queries), tf.shape(keys))
 
         # Linear projections, 统一维度
         Q = tf.layers.dense(queries, num_units, activation=tf.nn.relu)  # (N, T_q, C)
