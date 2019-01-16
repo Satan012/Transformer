@@ -5,19 +5,19 @@ import os
 
 FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('train_set_path', 'cnn_tfrecord/google/train.tfrecord', 'the path of train set')
-tf.app.flags.DEFINE_string('valid_set_path', 'cnn_tfrecord/google/valid.tfrecord', 'the path of validation set')
-tf.app.flags.DEFINE_string('test_set_path', 'cnn_tfrecord/google/test.tfrecord', 'the path of test set')
+tf.app.flags.DEFINE_string('train_set_path', 'data/gigaword/gigaword_tfrecord/train_gigaword.tfrecord', 'the path of cnn_train set')
+tf.app.flags.DEFINE_string('valid_set_path', 'data/gigaword/gigaword_tfrecord/valid_gigaword.tfrecord', 'the path of validation set')
+tf.app.flags.DEFINE_string('test_set_path', 'data/gigaword/gigaword_tfrecord/valid_gigaword.tfrecord', 'the path of test set')
 tf.app.flags.DEFINE_integer('epoch', 100, 'epoch of training step')
-tf.app.flags.DEFINE_integer('batch_size', 16, 'mini_batch size')
-tf.app.flags.DEFINE_integer('input_max_len', 1000, 'max text length of input')
-tf.app.flags.DEFINE_integer('target_max_len', 100, 'max text length of target')
-tf.app.flags.DEFINE_integer('vocab_size', 32782, 'size of vocab')
+tf.app.flags.DEFINE_integer('batch_size', 512, 'mini_batch size')
+tf.app.flags.DEFINE_integer('input_max_len', 50, 'max text length of input')
+tf.app.flags.DEFINE_integer('target_max_len', 15, 'max text length of target')
+tf.app.flags.DEFINE_integer('vocab_size', 35000, 'size of vocab')
 tf.app.flags.DEFINE_integer('embedding_size', 256, 'embedding size of word')
-tf.app.flags.DEFINE_string('model_state', 'train', 'model state')
+tf.app.flags.DEFINE_string('model_state', 'cnn_train', 'model state')
 tf.app.flags.DEFINE_boolean('debugging', True, 'debugging or not')
-tf.app.flags.DEFINE_integer('head_num', 4, 'number of head')
-tf.app.flags.DEFINE_float('lr', 0.1, 'learning rate')
+tf.app.flags.DEFINE_integer('head_num', 8, 'number of head')
+tf.app.flags.DEFINE_float('lr', 0.0001, 'learning rate')
 tf.app.flags.DEFINE_integer('num_blocks', 6, 'number of block')
 tf.app.flags.DEFINE_boolean('sinusoid', True, 'whether use to positional embedding')
 
@@ -47,11 +47,11 @@ class Model(object):
         }
         return result
 
-    def getDataset(self, data_path, mode='train'):
+    def getDataset(self, data_path, mode='cnn_train'):
         dataset = tf.data.TFRecordDataset(data_path)
         dataset = dataset.map(self.parse_function)
-        if mode == 'train':
-            dataset = dataset.shuffle(10000).batch(self.hps.batch_size)
+        if mode == 'cnn_train':
+            dataset = dataset.shuffle(1000000).batch(self.hps.batch_size)
         else:
             dataset = dataset.batch(self.hps.batch_size)
         iterator = dataset.make_initializable_iterator()
@@ -67,9 +67,9 @@ class Model(object):
         self.test_iterator = self.getDataset(self.hps.test_set_path, 'test')
         self.test_dataset = self.test_iterator.get_next()
         if self.hps.debugging:
-            if os.path.exists('log/train'):
-                print('remove：' + 'log/train')
-                shutil.rmtree('log/train')
+            if os.path.exists('log/giga_train'):
+                print('remove：' + 'log/giga_train')
+                shutil.rmtree('log/giga_train')
 
         # Placeholders for input, output and dropout
         self.input_x = tf.placeholder(tf.int32, [None, self.hps.input_max_len], name="input_x")
