@@ -3,27 +3,11 @@ import shutil
 from modules import *
 import os
 
-FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('train_set_path', 'data/gigaword/gigaword_tfrecord/train_gigaword.tfrecord', 'the path of cnn_train set')
-tf.app.flags.DEFINE_string('valid_set_path', 'data/gigaword/gigaword_tfrecord/valid_gigaword.tfrecord', 'the path of validation set')
-tf.app.flags.DEFINE_string('test_set_path', 'data/gigaword/gigaword_tfrecord/valid_gigaword.tfrecord', 'the path of test set')
-tf.app.flags.DEFINE_integer('epoch', 100, 'epoch of training step')
-tf.app.flags.DEFINE_integer('batch_size', 512, 'mini_batch size')
-tf.app.flags.DEFINE_integer('input_max_len', 50, 'max text length of input')
-tf.app.flags.DEFINE_integer('target_max_len', 15, 'max text length of target')
-tf.app.flags.DEFINE_integer('vocab_size', 35000, 'size of vocab')
-tf.app.flags.DEFINE_integer('embedding_size', 256, 'embedding size of word')
-tf.app.flags.DEFINE_string('model_state', 'cnn_train', 'model state')
-tf.app.flags.DEFINE_boolean('debugging', True, 'debugging or not')
-tf.app.flags.DEFINE_integer('head_num', 8, 'number of head')
-tf.app.flags.DEFINE_float('lr', 0.0001, 'learning rate')
-tf.app.flags.DEFINE_integer('num_blocks', 6, 'number of block')
-tf.app.flags.DEFINE_boolean('sinusoid', True, 'whether use to positional embedding')
 
 
 class Model(object):
-    def setHps(self):
+    def setHps(self, FLAGS):
         d = dict(FLAGS.flag_values_dict())
         hps = namedtuple('HParams', list(d.keys()))
         hps = hps._make(list(d.values()))
@@ -47,18 +31,18 @@ class Model(object):
         }
         return result
 
-    def getDataset(self, data_path, mode='cnn_train'):
+    def getDataset(self, data_path, mode='train'):
         dataset = tf.data.TFRecordDataset(data_path)
         dataset = dataset.map(self.parse_function)
-        if mode == 'cnn_train':
+        if mode == 'train':
             dataset = dataset.shuffle(1000000).batch(self.hps.batch_size)
         else:
             dataset = dataset.batch(self.hps.batch_size)
         iterator = dataset.make_initializable_iterator()
         return iterator
 
-    def __init__(self, is_training=True):
-        self.hps = self.setHps()
+    def __init__(self, FLAGS, is_training=True):
+        self.hps = self.setHps(FLAGS)
         self.global_step = tf.train.create_global_step()
         self.train_iterator = self.getDataset(self.hps.train_set_path)
         self.train_dataset = self.train_iterator.get_next()
@@ -67,9 +51,9 @@ class Model(object):
         self.test_iterator = self.getDataset(self.hps.test_set_path, 'test')
         self.test_dataset = self.test_iterator.get_next()
         if self.hps.debugging:
-            if os.path.exists('log/giga_train'):
-                print('remove：' + 'log/giga_train')
-                shutil.rmtree('log/giga_train')
+            if os.path.exists(self.hps.logdir):
+                print('remove：' + self.hps.logdir)
+                shutil.rmtree(self.hps.logdir)
 
         # Placeholders for input, output and dropout
         self.input_x = tf.placeholder(tf.int32, [None, self.hps.input_max_len], name="input_x")
@@ -79,6 +63,13 @@ class Model(object):
 
         self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
         self.batch_size = tf.placeholder(tf.int32, name='batch_size')
+
+        # self.lr = tf.train.exponential_decay(self.hps.lr,
+        #                             self.global_step,
+        #                             10000,
+        #                             0.8,
+        #                             staircase=True)
+        self.lr = self.hps.lr
 
         # Encoder
         with tf.variable_scope("encoder"):
@@ -179,9 +170,6 @@ class Model(object):
 
         if is_training:
             # Loss
-            # self.y_smoothed = tf.one_hot(self.label_y, depth=self.hps.vocab_size)
-            # self.loss = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.y_smoothed)
-            # print('shape-->self.loss:', np.shape(self.loss))
             self.loss = tf.contrib.seq2seq.sequence_loss(
                     self.logits,
                     self.label_y,
@@ -190,7 +178,7 @@ class Model(object):
             # self.mean_loss = tf.reduce_sum(self.loss * tf.cast(self.y_mask, dtype=tf.float32))
             self.mean_loss = self.loss
             # Training Scheme
-            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.hps.lr)
+            self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
             self.train_op = self.optimizer.minimize(self.mean_loss, global_step=self.global_step)
 
             # Summary
